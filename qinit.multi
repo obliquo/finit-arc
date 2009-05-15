@@ -1,0 +1,92 @@
+#!/bin/bash
+#
+# /etc/rc.multi
+#
+
+sleep 1
+
+. /etc/rc.conf
+. /etc/rc.d/functions
+
+# Continue removing Leftover files
+/bin/rm -f /etc/nologin &>/dev/null
+/bin/rm -f /etc/shutdownpid &>/dev/null
+/bin/rm -f /forcefsck &>/dev/null
+/bin/mount -n -t tmpfs none /var/lock
+
+
+# Loadkeys
+/bin/loadkeys -q $KEYMAP
+
+
+# Udevadm
+if [ -x /sbin/udevadm -a -d /sys/block ]; then
+	/sbin/udevd --daemon
+	/sbin/udevadm trigger &
+fi
+
+
+# Set system time
+if [ ! -f /var/lib/hwclock/adjtime ]; then
+	echo "0.0 0 0.0" > /var/lib/hwclock/adjtime
+fi
+if [ "$TIMEZONE" != "" -a -e "/usr/share/zoneinfo/$TIMEZONE" ]; then
+	/bin/rm -f /etc/localtime
+	/bin/cp "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
+fi
+/sbin/hwclock --adjust #Adjust for system drift
+/sbin/hwclock $HWCLOCK_PARAMS
+
+
+# Random seed
+if [ -f /var/run/random-seed ]; then
+	/bin/cat /var/run/random-seed >/dev/urandom
+fi
+
+
+# Set the NIS domain name, if necessary
+[ -f /etc/conf.d/nisdomainname ] && . /etc/conf.d/nisdomainname
+if [ "$NISDOMAINNAME" != "" ]; then
+	/bin/nisdomainname $NISDOMAINNAME
+fi
+
+
+# Updating Module Dependencies
+sbin/depmod -A
+
+
+# Load sysctl variables if sysctl.conf is present
+[ -r /etc/sysctl.conf ] && /sbin/sysctl -q -p &>/dev/null
+
+
+# Start daemons
+for daemon in "${DAEMONS[@]}"; do
+	if [ "$daemon" = "${daemon#!}" ]; then
+		if [ "$daemon" = "${daemon#@}" ]; then
+			/etc/rc.d/$daemon start
+		else
+			stat_bkgd "Starting ${daemon:1}"
+			(/etc/rc.d/${daemon:1} start) &>/dev/null &
+		fi
+	fi
+done
+
+
+# Adding persistent network/cdrom generated rules
+if [ -f "/dev/.udev/tmp-rules--70-persistent-cd.rules" ]; then
+	/bin/cat /dev/.udev/tmp-rules--70-persistent-cd.rules >> /etc/udev/rules.d/70-persistent-cd.rules
+fi
+if [ -f "/dev/.udev/tmp-rules--70-persistent-net.rules" ]; then
+	/bin/cat /dev/.udev/tmp-rules--70-persistent-net.rules >> /etc/udev/rules.d/70-persistent-net.rules
+fi
+
+
+# Swapon
+/sbin/swapon -a
+
+
+# Save our dmesg output from this boot
+if [ -f /var/log/dmesg.log ]; then
+	/bin/rm /var/log/dmesg.log
+fi
+/bin/dmesg > /var/log/dmesg.log
